@@ -1,5 +1,6 @@
 package liquibase.ext.cosmosdb.database;
 
+import com.azure.cosmos.ConnectionMode;
 import com.azure.cosmos.ConsistencyLevel;
 import com.azure.cosmos.CosmosClient;
 import com.azure.cosmos.CosmosClientBuilder;
@@ -10,6 +11,8 @@ import liquibase.util.StringUtil;
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.DriverPropertyInfo;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.logging.Logger;
 
@@ -27,12 +30,20 @@ public class CosmosClientDriver implements Driver {
     public CosmosClientProxy connect(final CosmosConnectionString cosmosConnectionString) throws DatabaseException {
         final CosmosClient client;
         try {
-            client = new CosmosClientBuilder()
+            final CosmosClientBuilder builder = new CosmosClientBuilder()
                     .endpoint(cosmosConnectionString.getAccountEndpoint().orElse(""))
                     .key(cosmosConnectionString.getAccountKey().orElse(""))
                     .consistencyLevel(ConsistencyLevel.EVENTUAL)
-                    .userAgentSuffix(LIQUIBASE_EXTENSION_USER_AGENT_SUFFIX)
-                    .buildClient();
+                    .userAgentSuffix(LIQUIBASE_EXTENSION_USER_AGENT_SUFFIX);
+
+            final ConnectionMode connectionMode = resolveConnectionMode(cosmosConnectionString.getConnectionMode());
+            if (connectionMode == ConnectionMode.GATEWAY) {
+                builder.gatewayMode();
+            } else if (connectionMode == ConnectionMode.DIRECT) {
+                builder.directMode();
+            }
+
+            client = builder.buildClient();
         } catch (final Exception e) {
             final String message = String.format(
                     "Connection could not be established to endpoint: %s, database: %s",
@@ -43,6 +54,21 @@ public class CosmosClientDriver implements Driver {
             throw new DatabaseException(message, e);
         }
         return CosmosClientProxy.builder().cosmosClient(client).build();
+    }
+
+    static ConnectionMode resolveConnectionMode(final Optional<String> connectionModeProperty) {
+        return connectionModeProperty
+                .map(String::trim)
+                .filter(v -> !v.isEmpty())
+                .map(v -> {
+                    try {
+                        return ConnectionMode.valueOf(v.toUpperCase(Locale.ROOT));
+                    } catch (IllegalArgumentException e) {
+                        throw new IllegalArgumentException(
+                                "Invalid connectionMode: '" + v + "'. Valid values are: gateway, direct.", e);
+                    }
+                })
+                .orElse(null);
     }
 
     @Override
